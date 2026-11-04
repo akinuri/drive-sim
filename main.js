@@ -240,7 +240,7 @@ renderer.domElement.addEventListener('pointerup', () => { orbit.dragging = false
 renderer.domElement.addEventListener('pointermove', e => {
   if (!orbit.dragging) return;
   orbit.yaw -= e.movementX * 0.005;
-  orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + e.movementY * 0.005, 0.05, 1.45);
+  orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + e.movementY * 0.005, -0.4, 1.45);
 });
 renderer.domElement.addEventListener('wheel', e => {
   orbit.dist = THREE.MathUtils.clamp(orbit.dist * (1 + Math.sign(e.deltaY) * 0.1), 4, 40);
@@ -251,7 +251,7 @@ function updateCamera(dt) {
   const yaw = state.heading + Math.PI + orbit.yaw;
   const desired = new THREE.Vector3(
     state.x + Math.sin(yaw) * Math.cos(orbit.pitch) * orbit.dist,
-    1.2 + Math.sin(orbit.pitch) * orbit.dist,
+    Math.max(0.12, 1.2 + Math.sin(orbit.pitch) * orbit.dist),
     state.z + Math.cos(yaw) * Math.cos(orbit.pitch) * orbit.dist
   );
   camPos.lerp(desired, 1 - Math.exp(-(orbit.dragging ? 30 : 5) * dt));
