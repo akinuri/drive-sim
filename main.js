@@ -179,31 +179,176 @@ addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'KeyR') rese
 addEventListener('keyup', e => keys.delete(e.code));
 const down = (...c) => c.some(k => keys.has(k));
 
+// ---------- predicted path ----------
+// Ribbon as wide as the car, projected ahead along the arc the front tyres are pointing at, fading with distance.
+const PATH_LENGTH = 18, PATH_STEP = 0.5, TRAIL_MAX = Math.ceil(PATH_LENGTH / PATH_STEP) + 1;
+const PREVIEW_SPEED = 12 / 3.6; // m/s; speed assumed for the preview (light throttle taps hover around 10-12 km/h)
+const trailPos = new Float32Array(TRAIL_MAX * 2 * 3);
+const trailCol = new Float32Array(TRAIL_MAX * 2 * 4);
+const trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3).setUsage(THREE.DynamicDrawUsage));
+trailGeo.setAttribute('color', new THREE.BufferAttribute(trailCol, 4).setUsage(THREE.DynamicDrawUsage));
+const trailIndex = [];
+for (let i = 0; i < TRAIL_MAX - 1; i++) {
+  const a = i * 2;
+  trailIndex.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+}
+trailGeo.setIndex(trailIndex);
+trailGeo.setDrawRange(0, (TRAIL_MAX - 1) * 6);
+const trailMesh = new THREE.Mesh(trailGeo, new THREE.MeshBasicMaterial({
+  vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide
+}));
+trailMesh.frustumCulled = false;
+trailMesh.renderOrder = 1;
+scene.add(trailMesh);
+
+// B bakes the current predicted path onto the ground as a permanent orange ribbon; C clears them
+const baked = [];
+function bakePath() {
+  const g = new THREE.BufferGeometry();
+  const pos = trailPos.slice();
+  const col = new Float32Array(TRAIL_MAX * 2 * 4);
+  for (let i = 0; i < TRAIL_MAX; i++) {
+    const a = 0.55 * (1 - i / (TRAIL_MAX - 1) * 0.6);
+    col.set([1, 0.6, 0.1, a, 1, 0.6, 0.1, a], i * 8);
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 4));
+  g.setIndex(trailIndex);
+  const m = new THREE.Mesh(g, trailMesh.material);
+  m.frustumCulled = false;
+  m.position.y = 0.01 * (baked.length % 5); // avoids z-fighting where baked paths overlap
+  m.renderOrder = 0;
+  scene.add(m);
+  baked.push(m);
+  toast('Path saved', true);
+}
+function clearBaked() {
+  for (const m of baked) { scene.remove(m); m.geometry.dispose(); }
+  baked.length = 0;
+}
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.code === 'KeyB') bakePath();
+  if (e.code === 'KeyC') clearBaked();
+});
+
+// T starts/stops recording the driven path as a green ribbon on the ground; X clears recordings
+const REC_MAX = 6000, REC_STEP = 0.3;
+const recordings = [];
+let rec = null;
+function startRecording() {
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(REC_MAX * 6), col = new Float32Array(REC_MAX * 8);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 4).setUsage(THREE.DynamicDrawUsage));
+  const idx = [];
+  for (let i = 0; i < REC_MAX - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  g.setIndex(idx);
+  g.setDrawRange(0, 0);
+  const m = new THREE.Mesh(g, trailMesh.material);
+  m.frustumCulled = false;
+  m.position.y = 0.01 * (recordings.length % 5);
+  scene.add(m);
+  rec = { mesh: m, pos, col, count: 0, x: Infinity, z: Infinity };
+  recordings.push(rec);
+  addRecordingPoint();
+  $('recState').style.display = '';
+  toast('Recording path', true);
+}
+function stopRecording() {
+  rec = null;
+  $('recState').style.display = 'none';
+  toast('Recording stopped', true);
+}
+function clearRecordings() {
+  for (const r of recordings) { scene.remove(r.mesh); r.mesh.geometry.dispose(); }
+  recordings.length = 0;
+  if (rec) { rec = null; $('recState').style.display = 'none'; }
+}
+function addRecordingPoint() {
+  if (rec.count >= REC_MAX) return stopRecording();
+  const half = CAR.width / 2, rx = Math.cos(state.heading) * half, rz = -Math.sin(state.heading) * half;
+  const i = rec.count++;
+  rec.pos.set([state.x + rx, 0.08, state.z + rz, state.x - rx, 0.08, state.z - rz], i * 6);
+  rec.col.set([0.3, 1, 0.45, 0.5, 0.3, 1, 0.45, 0.5], i * 8);
+  rec.x = state.x; rec.z = state.z;
+  const g = rec.mesh.geometry;
+  g.setDrawRange(0, Math.max(0, rec.count - 1) * 6);
+  g.attributes.position.needsUpdate = true;
+  g.attributes.color.needsUpdate = true;
+}
+function updateRecording() {
+  if (rec && Math.hypot(state.x - rec.x, state.z - rec.z) >= REC_STEP) addRecordingPoint();
+}
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.code === 'KeyT') rec ? stopRecording() : startRecording();
+  if (e.code === 'KeyX') clearRecordings();
+});
+
+const PREVIEW_SPEED_REVERSE = 7 / 3.6; // reversing is driven slower, so it gets more steering lock
+let pathDir = 1;
+function updateTrail() {
+  // arc the front tyres will follow at the assumed driving speed: the steering limit depends on speed, so the
+  // preview uses the limit at PREVIEW_SPEED instead of the instantaneous (often zero) speed
+  // direction of travel; when (nearly) stopped keep the last one, or follow the pedal (S = reverse, W = forward)
+  if (state.speed < -0.5) pathDir = -1;
+  else if (state.speed > 0.5) pathDir = 1;
+  else if (down('KeyS', 'ArrowDown') && !down('KeyW', 'ArrowUp')) pathDir = -1;
+  else if (down('KeyW', 'ArrowUp')) pathDir = 1;
+  const dir = pathDir;
+  const limit = WHEEL_LOCK / (1 + (dir < 0 ? PREVIEW_SPEED_REVERSE : PREVIEW_SPEED) * 0.04);
+  const curvature = Math.tan(wheelToSteer(THREE.MathUtils.clamp(wheelAngle, -limit, limit))) / WHEELBASE;
+  const half = CAR.width / 2;
+  let x = state.x, z = state.z, h = state.heading;
+  for (let i = 0; i < TRAIL_MAX; i++) {
+    const rx = Math.cos(h) * half, rz = -Math.sin(h) * half;
+    const alpha = (1 - i / (TRAIL_MAX - 1)) * 0.45;
+    trailPos.set([x + rx, 0.08, z + rz, x - rx, 0.08, z - rz], i * 6);
+    trailCol.set([0.3, 0.8, 1, alpha, 0.3, 0.8, 1, alpha], i * 8);
+    const ds = dir * PATH_STEP;
+    h += curvature * ds;
+    x += Math.sin(h) * ds;
+    z += Math.cos(h) * ds;
+  }
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.attributes.color.needsUpdate = true;
+}
+
 // ---------- simulation ----------
 const MAX_SPEED = 45, ACCEL = 14, BRAKE = 30, DRAG = 0.4, ROLL = 3, WHEELBASE = 2.55, MAX_STEER = 0.55;
 let wheelAngle = 0; // steering wheel angle in degrees, + = left
 let steer = 0; // resulting road-wheel angle in radians, derived from wheelAngle
 const WHEEL_LOCK = 540; // steering wheel degrees each side of centre (1.5 turns, 3 turns lock to lock)
 
+function stepSpeed(speed, throttle, brake, hand, dt) {
+  if (throttle) speed += ACCEL * dt;
+  if (brake) speed -= (speed > 0 ? BRAKE : ACCEL * 0.6) * dt;
+  if (hand) speed -= Math.sign(speed) * Math.min(Math.abs(speed), BRAKE * 1.2 * dt);
+  // drag + rolling resistance
+  speed -= (speed * DRAG * dt) + Math.sign(speed) * Math.min(Math.abs(speed), ROLL * dt);
+  return THREE.MathUtils.clamp(speed, -12, MAX_SPEED);
+}
+
+// the driver turns the steering wheel at a limited rate (deg/s); keyboard can't turn it as far at speed
+function stepWheel(angle, speed, input, dt) {
+  const target = input * WHEEL_LOCK / (1 + Math.abs(speed) * 0.04);
+  const counter = input !== 0 && Math.sign(target) !== Math.sign(angle) && angle !== 0;
+  const rate = (input === 0 ? 300 : counter ? 600 : 400) * dt;
+  return angle + THREE.MathUtils.clamp(target - angle, -rate, rate);
+}
+const wheelToSteer = a => (a / WHEEL_LOCK) * MAX_STEER;
+
 function update(dt) {
   const throttle = down('KeyW', 'ArrowUp') ? 1 : 0;
   const brake = down('KeyS', 'ArrowDown') ? 1 : 0;
   const hand = down('Space');
-
-  if (throttle) state.speed += ACCEL * dt;
-  if (brake) state.speed -= (state.speed > 0 ? BRAKE : ACCEL * 0.6) * dt;
-  if (hand) state.speed -= Math.sign(state.speed) * Math.min(Math.abs(state.speed), BRAKE * 1.2 * dt);
-  // drag + rolling resistance
-  state.speed -= (state.speed * DRAG * dt) + Math.sign(state.speed) * Math.min(Math.abs(state.speed), ROLL * dt);
-  state.speed = THREE.MathUtils.clamp(state.speed, -12, MAX_SPEED);
-
-  // the driver turns the steering wheel at a limited rate (deg/s); keyboard can't turn it as far at speed
   const input = (down('KeyA', 'ArrowLeft') ? 1 : 0) - (down('KeyD', 'ArrowRight') ? 1 : 0);
-  const target = input * WHEEL_LOCK / (1 + Math.abs(state.speed) * 0.04);
-  const counter = input !== 0 && Math.sign(target) !== Math.sign(wheelAngle) && wheelAngle !== 0;
-  const rate = (input === 0 ? 300 : counter ? 600 : 400) * dt;
-  wheelAngle += THREE.MathUtils.clamp(target - wheelAngle, -rate, rate);
-  steer = (wheelAngle / WHEEL_LOCK) * MAX_STEER;
+
+  state.speed = stepSpeed(state.speed, throttle, brake, hand, dt);
+  wheelAngle = stepWheel(wheelAngle, state.speed, input, dt);
+  steer = wheelToSteer(wheelAngle);
 
   // bicycle model
   state.heading += (state.speed / WHEELBASE) * Math.tan(steer) * dt;
@@ -284,8 +429,9 @@ $('limit').textContent = SPEED_LIMIT;
 addEventListener('keydown', e => { if (e.code === 'KeyH') $('help').style.display = $('help').style.display === 'none' ? '' : 'none'; });
 
 let hits = 0, wasColliding = false, toastTimer = 0;
-function toast(msg) {
+function toast(msg, info = false) {
   $('toast').textContent = msg;
+  $('toast').classList.toggle('info', info);
   $('toast').classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 1500);
@@ -362,6 +508,8 @@ renderer.setAnimationLoop(now => {
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
   update(dt);
+  updateTrail();
+  updateRecording();
   updateCamera(dt);
   updateHud();
   renderer.render(scene, camera);
