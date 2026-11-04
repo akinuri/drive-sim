@@ -123,15 +123,19 @@ function update(dt) {
   state.z += Math.cos(state.heading) * state.speed * dt;
 
   // obstacle collisions
+  let colliding = false;
   for (const o of obstacles) {
     const dx = state.x - o.x, dz = state.z - o.z;
     const dist = Math.hypot(dx, dz), min = o.r + 1.5;
     if (dist < min) {
+      colliding = true;
       state.x = o.x + (dx / dist) * min;
       state.z = o.z + (dz / dist) * min;
       state.speed *= 0.5;
     }
   }
+  if (colliding && !wasColliding) { hits++; toast('Collision!'); }
+  wasColliding = colliding;
 
   car.position.set(state.x, 0, state.z);
   car.rotation.y = state.heading;
@@ -149,14 +153,96 @@ function updateCamera(dt) {
 }
 camPos.set(0, 4, -59);
 
-const speedEl = document.getElementById('speed');
+// ---------- HUD ----------
+const $ = id => document.getElementById(id);
+const SPEED_LIMIT = 60; // km/h
+const GAUGE_MAX = 180;
+const gaugeCtx = document.querySelector('#gauge canvas').getContext('2d');
+const mapCtx = document.querySelector('#minimap canvas').getContext('2d');
+$('limit').textContent = SPEED_LIMIT;
+addEventListener('keydown', e => { if (e.code === 'KeyH') $('help').style.display = $('help').style.display === 'none' ? '' : 'none'; });
+
+let hits = 0, wasColliding = false, toastTimer = 0;
+function toast(msg) {
+  $('toast').textContent = msg;
+  $('toast').classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 1500);
+}
+
+function drawGauge(kmh) {
+  const c = gaugeCtx, S = 440, cx = S / 2, cy = S / 2, R = 190;
+  const a0 = Math.PI * 0.75, sweep = Math.PI * 1.5;
+  const ang = v => a0 + sweep * Math.min(v / GAUGE_MAX, 1);
+  c.clearRect(0, 0, S, S);
+  c.lineCap = 'round';
+  c.lineWidth = 16;
+  c.strokeStyle = '#ffffff22';
+  c.beginPath(); c.arc(cx, cy, R, a0, a0 + sweep); c.stroke();
+  c.strokeStyle = kmh > SPEED_LIMIT ? '#ff5252' : '#4fc3f7';
+  c.beginPath(); c.arc(cx, cy, R, a0, ang(kmh)); c.stroke();
+  // limit marker + ticks
+  c.fillStyle = '#fff'; c.font = '20px Segoe UI, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  for (let v = 0; v <= GAUGE_MAX; v += 20) {
+    const a = ang(v), ca = Math.cos(a), sa = Math.sin(a);
+    c.lineWidth = 3; c.strokeStyle = '#fffa';
+    c.beginPath(); c.moveTo(cx + ca * (R - 16), cy + sa * (R - 16)); c.lineTo(cx + ca * (R - 30), cy + sa * (R - 30)); c.stroke();
+    c.fillText(v, cx + ca * (R - 54), cy + sa * (R - 54));
+  }
+  const la = ang(SPEED_LIMIT);
+  c.lineWidth = 6; c.strokeStyle = '#ffeb3b';
+  c.beginPath(); c.moveTo(cx + Math.cos(la) * (R - 12), cy + Math.sin(la) * (R - 12)); c.lineTo(cx + Math.cos(la) * (R + 12), cy + Math.sin(la) * (R + 12)); c.stroke();
+}
+
+const MAP_SCALE = 1.2; // pixels per metre (map canvas is 340px)
+function drawMap() {
+  const c = mapCtx, S = 340;
+  c.save();
+  c.clearRect(0, 0, S, S);
+  c.translate(S / 2, S / 2);
+  // rotate so the car always points up
+  c.rotate(Math.PI + state.heading);
+  c.scale(MAP_SCALE, MAP_SCALE);
+  c.translate(-state.x, -state.z);
+  c.fillStyle = '#2e5a2e'; c.fillRect(state.x - 200, state.z - 200, 400, 400);
+  c.lineWidth = 20; c.strokeStyle = '#555';
+  c.beginPath(); c.arc(0, 0, 50, 0, Math.PI * 2); c.stroke();
+  c.lineWidth = 0.6; c.strokeStyle = '#fff';
+  c.beginPath(); c.arc(0, 0, 50, 0, Math.PI * 2); c.stroke();
+  c.fillStyle = '#b0b0b0';
+  for (const o of obstacles) { c.beginPath(); c.arc(o.x, o.z, o.r, 0, Math.PI * 2); c.fill(); }
+  c.restore();
+  // car marker
+  c.fillStyle = '#ff5252';
+  c.beginPath(); c.moveTo(S / 2, S / 2 - 14); c.lineTo(S / 2 + 9, S / 2 + 10); c.lineTo(S / 2 - 9, S / 2 + 10); c.closePath(); c.fill();
+}
+
+function updateHud() {
+  const kmh = Math.abs(state.speed) * 3.6;
+  $('speed').textContent = Math.round(kmh);
+  $('gear').textContent = kmh < 1 ? 'P' : state.speed < 0 ? 'R' : 'D';
+  $('limit').classList.toggle('over', kmh > SPEED_LIMIT + 2);
+  $('thr').firstElementChild.style.height = (down('KeyW', 'ArrowUp') ? 100 : 0) + '%';
+  $('brk').firstElementChild.style.height = (down('KeyS', 'ArrowDown', 'Space') ? 100 : 0) + '%';
+  $('wheel').style.transform = `rotate(${-steer / MAX_STEER * 120}deg)`;
+
+  const r = Math.hypot(state.x, state.z);
+  const onRoad = r > 40 && r < 60;
+  $('roadState').textContent = onRoad ? 'On road' : 'Off road';
+  $('roadState').className = onRoad ? 'ok' : 'bad';
+  $('hits').textContent = `Collisions: ${hits}`;
+
+  drawGauge(kmh);
+  drawMap();
+}
+
 let last = performance.now();
 renderer.setAnimationLoop(now => {
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
   update(dt);
   updateCamera(dt);
-  speedEl.textContent = Math.round(Math.abs(state.speed) * 3.6);
+  updateHud();
   renderer.render(scene, camera);
 });
 

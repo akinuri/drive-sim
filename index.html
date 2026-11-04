@@ -3,18 +3,39 @@
 <head>
 <meta charset="utf-8">
 <title>Drive Sim</title>
+<link rel="stylesheet" href="./hud.css">
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
-  #hud { position: fixed; left: 16px; bottom: 16px; color: #fff; font-size: 28px; text-shadow: 0 1px 4px #000; }
-  #help { position: fixed; left: 16px; top: 16px; color: #fff; font-size: 14px; text-shadow: 0 1px 3px #000; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 </style>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
 </script>
 </head>
 <body>
-<div id="help">W/S or ↑/↓: accelerate/brake · A/D or ←/→: steer · Space: handbrake · R: reset</div>
-<div id="hud"><span id="speed">0</span> km/h</div>
+<div id="hud">
+  <div id="help" class="panel">
+    <div><kbd>W</kbd>/<kbd>S</kbd> gas / brake</div>
+    <div><kbd>A</kbd>/<kbd>D</kbd> steer</div>
+    <div><kbd>Space</kbd> handbrake</div>
+    <div><kbd>R</kbd> reset · <kbd>H</kbd> hide help</div>
+  </div>
+  <div id="status" class="panel">
+    <span id="roadState" class="ok">On road</span>
+    <span id="hits">Collisions: 0</span>
+  </div>
+  <div id="toast" class="panel"></div>
+  <div id="minimap" class="panel"><canvas width="340" height="340"></canvas></div>
+  <div id="limit">60</div>
+  <div id="gauge" class="panel">
+    <canvas width="440" height="440"></canvas>
+    <div class="readout"><div id="speed">0</div><small>KM/H</small><div id="gear">P</div></div>
+  </div>
+  <div id="pedals" class="panel">
+    <div class="bar" id="brk"><i></i></div>
+    <div class="bar" id="thr"><i></i></div>
+    <div id="wheel"></div>
+  </div>
+</div>
 <script type="module" src="./main.js"></script>
 </body>
 </html>
