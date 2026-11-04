@@ -181,7 +181,9 @@ const down = (...c) => c.some(k => keys.has(k));
 
 // ---------- simulation ----------
 const MAX_SPEED = 45, ACCEL = 14, BRAKE = 30, DRAG = 0.4, ROLL = 3, WHEELBASE = 2.55, MAX_STEER = 0.55;
-let steer = 0;
+let wheelAngle = 0; // steering wheel angle in degrees, + = left
+let steer = 0; // resulting road-wheel angle in radians, derived from wheelAngle
+const WHEEL_LOCK = 540; // steering wheel degrees each side of centre (1.5 turns, 3 turns lock to lock)
 
 function update(dt) {
   const throttle = down('KeyW', 'ArrowUp') ? 1 : 0;
@@ -195,10 +197,13 @@ function update(dt) {
   state.speed -= (state.speed * DRAG * dt) + Math.sign(state.speed) * Math.min(Math.abs(state.speed), ROLL * dt);
   state.speed = THREE.MathUtils.clamp(state.speed, -12, MAX_SPEED);
 
-  // steering eases toward target and is reduced at speed
-  const target = ((down('KeyA', 'ArrowLeft') ? 1 : 0) - (down('KeyD', 'ArrowRight') ? 1 : 0)) *
-    MAX_STEER / (1 + Math.abs(state.speed) * 0.04);
-  steer += (target - steer) * Math.min(1, 8 * dt);
+  // the driver turns the steering wheel at a limited rate (deg/s); keyboard can't turn it as far at speed
+  const input = (down('KeyA', 'ArrowLeft') ? 1 : 0) - (down('KeyD', 'ArrowRight') ? 1 : 0);
+  const target = input * WHEEL_LOCK / (1 + Math.abs(state.speed) * 0.04);
+  const counter = input !== 0 && Math.sign(target) !== Math.sign(wheelAngle) && wheelAngle !== 0;
+  const rate = (input === 0 ? 300 : counter ? 600 : 400) * dt;
+  wheelAngle += THREE.MathUtils.clamp(target - wheelAngle, -rate, rate);
+  steer = (wheelAngle / WHEEL_LOCK) * MAX_STEER;
 
   // bicycle model
   state.heading += (state.speed / WHEELBASE) * Math.tan(steer) * dt;
@@ -340,7 +345,7 @@ function updateHud() {
   $('limit').classList.toggle('over', kmh > SPEED_LIMIT + 2);
   $('thr').firstElementChild.style.height = (down('KeyW', 'ArrowUp') ? 100 : 0) + '%';
   $('brk').firstElementChild.style.height = (down('KeyS', 'ArrowDown', 'Space') ? 100 : 0) + '%';
-  $('wheel').style.transform = `rotate(${-steer / MAX_STEER * 120}deg)`;
+  $('wheel').style.transform = `rotate(${-wheelAngle}deg)`;
 
   const r = Math.hypot(state.x, state.z);
   const onRoad = r > 40 && r < 60;
