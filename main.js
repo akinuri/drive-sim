@@ -248,6 +248,13 @@ renderer.domElement.addEventListener('wheel', e => {
 renderer.domElement.addEventListener('dblclick', () => { orbit.yaw = 0; orbit.pitch = 0.4; orbit.dist = 9; });
 
 function updateCamera(dt) {
+  // while driving (and not dragging) ease the orbit back to the default chase view
+  if (!orbit.dragging && Math.abs(state.speed) > 0.5) {
+    const k = 1 - Math.exp(-3 * dt);
+    orbit.yaw = THREE.MathUtils.euclideanModulo(orbit.yaw + Math.PI, Math.PI * 2) - Math.PI;
+    orbit.yaw -= orbit.yaw * k;
+    orbit.pitch += (0.4 - orbit.pitch) * k;
+  }
   const yaw = state.heading + Math.PI + orbit.yaw;
   const desired = new THREE.Vector3(
     state.x + Math.sin(yaw) * Math.cos(orbit.pitch) * orbit.dist,
