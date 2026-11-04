@@ -428,6 +428,21 @@ const mapCtx = document.querySelector('#minimap canvas').getContext('2d');
 $('limit').textContent = SPEED_LIMIT;
 addEventListener('keydown', e => { if (e.code === 'KeyH') $('help').style.display = $('help').style.display === 'none' ? '' : 'none'; });
 
+// render again right before reading so the canvas isn't blank (no preserveDrawingBuffer needed)
+function saveFrame() {
+  renderer.render(scene, camera);
+  renderer.domElement.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `drive-sim-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('Frame saved', true);
+  }, 'image/png');
+}
+$('snap').addEventListener('click', e => { e.currentTarget.blur(); saveFrame(); });
+addEventListener('keydown', e => { if (e.code === 'KeyP' && !e.repeat) saveFrame(); });
+
 let hits = 0, wasColliding = false, toastTimer = 0;
 function toast(msg, info = false) {
   $('toast').textContent = msg;
