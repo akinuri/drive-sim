@@ -31,6 +31,25 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
+// 1 m x 1 m grid overlay (toggle with G)
+const gridCanvas = document.createElement('canvas');
+gridCanvas.width = gridCanvas.height = 128;
+const gctx = gridCanvas.getContext('2d');
+gctx.strokeStyle = 'rgba(255,255,255,0.1)';
+gctx.lineWidth = 3;
+gctx.strokeRect(0, 0, 128, 128);
+const gridTex = new THREE.CanvasTexture(gridCanvas);
+gridTex.wrapS = gridTex.wrapT = THREE.RepeatWrapping;
+gridTex.repeat.set(2000, 2000); // plane is 2000 m, so 1 cell = 1 m
+gridTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+const grid = new THREE.Mesh(
+  new THREE.PlaneGeometry(2000, 2000),
+  new THREE.MeshBasicMaterial({ map: gridTex, transparent: true, depthWrite: false })
+);
+grid.rotation.x = -Math.PI / 2;
+grid.position.y = 0.06;
+addEventListener('keydown', e => { if (e.code === 'KeyG') grid.visible = !grid.visible; });
+
 // oval road made of a ring
 const road = new THREE.Mesh(
   new THREE.RingGeometry(40, 60, 64),
@@ -48,6 +67,7 @@ const line = new THREE.Mesh(
 line.rotation.x = -Math.PI / 2;
 line.position.y = 0.04;
 scene.add(line);
+scene.add(grid);
 
 // static obstacles: circle colliders {x, z, r}
 const obstacles = [];
