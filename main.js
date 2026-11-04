@@ -69,14 +69,14 @@ line.position.y = 0.04;
 scene.add(line);
 scene.add(grid);
 
-// static obstacles: circle colliders {x, z, r}
+// static obstacles: axis-aligned box colliders {x, z, hw, hd} (half extents)
 const obstacles = [];
 function addBox(x, z, w, h, d, color) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color }));
   m.position.set(x, h / 2, z);
   m.castShadow = m.receiveShadow = true;
   scene.add(m);
-  obstacles.push({ x, z, r: Math.max(w, d) / 2 });
+  obstacles.push({ x, z, hw: w / 2, hd: d / 2 });
 }
 for (let i = 0; i < 30; i++) {
   const a = Math.random() * Math.PI * 2;
@@ -86,19 +86,63 @@ for (let i = 0; i < 30; i++) {
 }
 
 // ---------- car ----------
+// Compact hatchback. Local +Z is forward, origin is the centre of the footprint.
+const CAR = { length: 4.0, width: 1.75, wheelbase: 2.55, track: 1.5, wheelRadius: 0.3, wheelWidth: 0.2 };
 const car = new THREE.Group();
-const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.6, 4), new THREE.MeshLambertMaterial({ color: 0xcc2222 }));
-body.position.y = 0.6;
-const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 2), new THREE.MeshLambertMaterial({ color: 0x99ccee }));
-cabin.position.set(0, 1.15, -0.2);
-body.castShadow = cabin.castShadow = true;
-car.add(body, cabin);
-const wheelGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.3, 16).rotateZ(Math.PI / 2);
-const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-for (const [x, z] of [[-0.95, 1.2], [0.95, 1.2], [-0.95, -1.2], [0.95, -1.2]]) {
-  const w = new THREE.Mesh(wheelGeo, wheelMat);
-  w.position.set(x, 0.35, z);
-  car.add(w);
+
+// side profile (x = along the car from the rear, y = height) extruded across the width
+function profileGeometry(points, width, bevel) {
+  const shape = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
+  const g = new THREE.ExtrudeGeometry(shape, {
+    depth: width - bevel * 2, bevelEnabled: true, bevelSize: bevel, bevelThickness: bevel, bevelSegments: 3, curveSegments: 1
+  });
+  g.translate(-CAR.length / 2, 0, -(width - bevel * 2) / 2);
+  g.rotateY(-Math.PI / 2); // shape x -> +Z (forward)
+  return g;
+}
+const paintMat = new THREE.MeshStandardMaterial({ color: 0x9fd8f0, metalness: 0.3, roughness: 0.4 });
+const glassMat = new THREE.MeshStandardMaterial({ color: 0x5f7f94, metalness: 0.6, roughness: 0.15 });
+const lowerBody = new THREE.Mesh(profileGeometry([
+  [0, 0.3], [0, 0.8], [0.1, 0.95], [2.9, 0.95], [3.85, 0.85], [4.0, 0.65], [4.0, 0.35]
+], CAR.width, 0.06), paintMat);
+const greenhouse = new THREE.Mesh(profileGeometry([
+  [0.25, 0.95], [0.55, 1.42], [2.2, 1.42], [2.95, 0.95]
+], CAR.width - 0.2, 0.03), glassMat);
+const roof = new THREE.Mesh(new THREE.BoxGeometry(CAR.width - 0.22, 0.06, 1.65), paintMat);
+roof.position.set(0, 1.45, -CAR.length / 2 + 1.375);
+for (const m of [lowerBody, greenhouse, roof]) m.castShadow = true;
+car.add(lowerBody, greenhouse, roof);
+
+// lights
+const headMat = new THREE.MeshStandardMaterial({ color: 0xcfcfc4, emissive: 0xfff3c0, emissiveIntensity: 0, roughness: 0.3 });
+const tailMat = new THREE.MeshStandardMaterial({ color: 0x6b1a22, emissive: 0xff1a1a, emissiveIntensity: 0, roughness: 0.4 });
+for (const s of [-1, 1]) {
+  const hl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.06), headMat);
+  hl.position.set(s * 0.6, 0.78, CAR.length / 2 + 0.05);
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.2, 0.06), tailMat);
+  tl.position.set(s * 0.65, 0.85, -CAR.length / 2 - 0.05);
+  car.add(hl, tl);
+}
+
+// wheels: front ones sit in a steering pivot, all spin around the axle
+const tyreGeo = new THREE.CylinderGeometry(CAR.wheelRadius, CAR.wheelRadius, CAR.wheelWidth, 24).rotateZ(Math.PI / 2);
+const rimGeo = new THREE.CylinderGeometry(CAR.wheelRadius * 0.62, CAR.wheelRadius * 0.62, CAR.wheelWidth + 0.02, 16).rotateZ(Math.PI / 2);
+const spokeGeo = new THREE.BoxGeometry(CAR.wheelWidth + 0.04, CAR.wheelRadius * 1.1, 0.05);
+const tyreMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
+const rimMat = new THREE.MeshStandardMaterial({ color: 0xc0c4c8, metalness: 0.9, roughness: 0.3 });
+const wheels = [];
+for (const sx of [-1, 1]) {
+  for (const sz of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(sx * CAR.track / 2, CAR.wheelRadius, sz * CAR.wheelbase / 2);
+    const spin = new THREE.Group();
+    const tyre = new THREE.Mesh(tyreGeo, tyreMat);
+    tyre.castShadow = true;
+    spin.add(tyre, new THREE.Mesh(rimGeo, rimMat), new THREE.Mesh(spokeGeo, tyreMat));
+    pivot.add(spin);
+    car.add(pivot);
+    wheels.push({ pivot, spin, front: sz > 0 });
+  }
 }
 scene.add(car);
 
@@ -110,6 +154,25 @@ function resetCar() {
   state.x = 0; state.z = -50; state.speed = 0; state.heading = Math.PI / 2;
 }
 
+// oriented car rectangle vs axis-aligned box (separating axis test).
+// Returns a push-out vector for the car, or null when not overlapping.
+function carVsBox(o) {
+  const hl = CAR.length / 2, hw = CAR.width / 2;
+  const fx = Math.sin(state.heading), fz = Math.cos(state.heading);
+  const rx = fz, rz = -fx;
+  const axes = [[1, 0], [0, 1], [fx, fz], [rx, rz]];
+  let best = null;
+  for (const [ax, az] of axes) {
+    const carR = hl * Math.abs(fx * ax + fz * az) + hw * Math.abs(rx * ax + rz * az);
+    const boxR = o.hw * Math.abs(ax) + o.hd * Math.abs(az);
+    const d = (state.x - o.x) * ax + (state.z - o.z) * az;
+    const overlap = carR + boxR - Math.abs(d);
+    if (overlap <= 0) return null;
+    if (!best || overlap < best.overlap) best = { overlap, ax: Math.sign(d || 1) * ax, az: Math.sign(d || 1) * az };
+  }
+  return best;
+}
+
 // ---------- input ----------
 const keys = new Set();
 addEventListener('keydown', e => { keys.add(e.code); if (e.code === 'KeyR') resetCar(); if (e.code === 'Space') e.preventDefault(); });
@@ -117,7 +180,7 @@ addEventListener('keyup', e => keys.delete(e.code));
 const down = (...c) => c.some(k => keys.has(k));
 
 // ---------- simulation ----------
-const MAX_SPEED = 45, ACCEL = 14, BRAKE = 30, DRAG = 0.4, ROLL = 3, WHEELBASE = 2.5, MAX_STEER = 0.55;
+const MAX_SPEED = 45, ACCEL = 14, BRAKE = 30, DRAG = 0.4, ROLL = 3, WHEELBASE = 2.55, MAX_STEER = 0.55;
 let steer = 0;
 
 function update(dt) {
@@ -145,12 +208,11 @@ function update(dt) {
   // obstacle collisions
   let colliding = false;
   for (const o of obstacles) {
-    const dx = state.x - o.x, dz = state.z - o.z;
-    const dist = Math.hypot(dx, dz), min = o.r + 1.5;
-    if (dist < min) {
+    const hit = carVsBox(o);
+    if (hit) {
       colliding = true;
-      state.x = o.x + (dx / dist) * min;
-      state.z = o.z + (dz / dist) * min;
+      state.x += hit.ax * hit.overlap;
+      state.z += hit.az * hit.overlap;
       state.speed *= 0.5;
     }
   }
@@ -159,6 +221,14 @@ function update(dt) {
 
   car.position.set(state.x, 0, state.z);
   car.rotation.y = state.heading;
+  // headlights glow while moving, tail lights glow when braking
+  headMat.emissiveIntensity = Math.abs(state.speed) > 0.5 ? 0.8 : 0;
+  const braking = brake || hand;
+  tailMat.emissiveIntensity = braking ? 1.2 : (Math.abs(state.speed) > 0.5 ? 0.25 : 0);
+  for (const w of wheels) {
+    w.spin.rotation.x += (state.speed / CAR.wheelRadius) * dt;
+    if (w.front) w.pivot.rotation.y = steer;
+  }
 }
 
 const camPos = new THREE.Vector3();
@@ -249,7 +319,7 @@ function drawMap() {
   c.lineWidth = 0.6; c.strokeStyle = '#fff';
   c.beginPath(); c.arc(0, 0, 50, 0, Math.PI * 2); c.stroke();
   c.fillStyle = '#b0b0b0';
-  for (const o of obstacles) { c.beginPath(); c.arc(o.x, o.z, o.r, 0, Math.PI * 2); c.fill(); }
+  for (const o of obstacles) c.fillRect(o.x - o.hw, o.z - o.hd, o.hw * 2, o.hd * 2);
   c.restore();
   // car marker
   c.fillStyle = '#ff5252';
