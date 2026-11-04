@@ -162,10 +162,29 @@ function update(dt) {
 }
 
 const camPos = new THREE.Vector3();
+// mouse drag orbits the camera around the car, wheel zooms, double-click recentres
+const orbit = { yaw: 0, pitch: 0.4, dist: 9, dragging: false };
+addEventListener('contextmenu', e => e.preventDefault());
+renderer.domElement.addEventListener('pointerdown', e => { orbit.dragging = true; renderer.domElement.setPointerCapture(e.pointerId); });
+renderer.domElement.addEventListener('pointerup', () => { orbit.dragging = false; });
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!orbit.dragging) return;
+  orbit.yaw -= e.movementX * 0.005;
+  orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + e.movementY * 0.005, 0.05, 1.45);
+});
+renderer.domElement.addEventListener('wheel', e => {
+  orbit.dist = THREE.MathUtils.clamp(orbit.dist * (1 + Math.sign(e.deltaY) * 0.1), 4, 40);
+}, { passive: true });
+renderer.domElement.addEventListener('dblclick', () => { orbit.yaw = 0; orbit.pitch = 0.4; orbit.dist = 9; });
+
 function updateCamera(dt) {
-  const back = new THREE.Vector3(-Math.sin(state.heading), 0, -Math.cos(state.heading));
-  const desired = new THREE.Vector3(state.x, 4, state.z).addScaledVector(back, 9);
-  camPos.lerp(desired, 1 - Math.exp(-5 * dt));
+  const yaw = state.heading + Math.PI + orbit.yaw;
+  const desired = new THREE.Vector3(
+    state.x + Math.sin(yaw) * Math.cos(orbit.pitch) * orbit.dist,
+    1.2 + Math.sin(orbit.pitch) * orbit.dist,
+    state.z + Math.cos(yaw) * Math.cos(orbit.pitch) * orbit.dist
+  );
+  camPos.lerp(desired, 1 - Math.exp(-(orbit.dragging ? 30 : 5) * dt));
   camera.position.copy(camPos);
   camera.lookAt(state.x, 1.2, state.z);
   sun.position.set(state.x + 50, 100, state.z + 30);
