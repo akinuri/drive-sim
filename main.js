@@ -428,17 +428,50 @@ const mapCtx = document.querySelector('#minimap canvas').getContext('2d');
 $('limit').textContent = SPEED_LIMIT;
 addEventListener('keydown', e => { if (e.code === 'KeyH') $('help').style.display = $('help').style.display === 'none' ? '' : 'none'; });
 
-// render again right before reading so the canvas isn't blank (no preserveDrawingBuffer needed)
-function saveFrame() {
-  renderer.render(scene, camera);
-  renderer.domElement.toBlob(blob => {
+// The HUD is DOM, so it is rasterised with html2canvas (loaded on first use) and drawn over the 3D frame.
+// html2canvas ignores backdrop-filter, so panels look slightly flatter in the image.
+const snapHud = $('snapHud');
+snapHud.checked = localStorage.getItem('snapHud') === '1';
+snapHud.addEventListener('change', () => localStorage.setItem('snapHud', snapHud.checked ? '1' : '0'));
+
+let saving = false;
+async function saveFrame() {
+  if (saving) return;
+  saving = true;
+  try {
+    renderer.render(scene, camera); // re-render so the canvas isn't blank (no preserveDrawingBuffer needed)
+    const out = document.createElement('canvas');
+    out.width = renderer.domElement.width;
+    out.height = renderer.domElement.height;
+    const ctx = out.getContext('2d');
+    ctx.drawImage(renderer.domElement, 0, 0);
+
+    if (snapHud.checked) {
+      try {
+        const { default: html2canvas } = await import('https://cdn.jsdelivr.net/npm/html2canvas-pro@1.5.8/+esm');
+        const hudCanvas = await html2canvas($('hud'), {
+          backgroundColor: null,
+          width: innerWidth, height: innerHeight,
+          scale: out.width / innerWidth,
+          ignoreElements: el => el.id === 'snapBox' || el.id === 'toast'
+        });
+        ctx.drawImage(hudCanvas, 0, 0, out.width, out.height);
+      } catch (err) {
+        console.error(err);
+        toast('HUD capture failed, saved 3D view only', true);
+      }
+    }
+
+    const blob = await new Promise(res => out.toBlob(res, 'image/png'));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `drive-sim-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
     a.click();
     URL.revokeObjectURL(a.href);
-    toast('Frame saved', true);
-  }, 'image/png');
+    if (!$('toast').classList.contains('show')) toast('Frame saved', true);
+  } finally {
+    saving = false;
+  }
 }
 $('snap').addEventListener('click', e => { e.currentTarget.blur(); saveFrame(); });
 addEventListener('keydown', e => { if (e.code === 'KeyP' && !e.repeat) saveFrame(); });

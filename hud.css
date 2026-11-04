@@ -34,8 +34,10 @@
 #toast.show { opacity: 1; }
 #toast.info { color: #ffb74d; }
 
-#snap { position: absolute; left: 20px; bottom: 130px; padding: 8px 14px; color: var(--fg); font: 600 14px "Segoe UI", system-ui, sans-serif; cursor: pointer; pointer-events: auto; }
-#snap:hover { background: rgba(40, 55, 80, .8); }
+#snapBox { position: absolute; left: 20px; bottom: 130px; padding: 6px 10px; display: flex; align-items: center; gap: 12px; pointer-events: auto; font: 600 14px "Segoe UI", system-ui, sans-serif; }
+#snap { background: none; border: 0; color: var(--fg); font: inherit; cursor: pointer; padding: 2px 0; }
+#snap:hover { color: var(--accent); }
+#snapBox label { font-weight: 400; font-size: 13px; opacity: .85; cursor: pointer; user-select: none; }
 
 #help { position: absolute; left: 20px; top: 20px; padding: 10px 14px; font-size: 13px; line-height: 1.7; }
 #help kbd { background: #fff2; border: 1px solid #fff3; border-radius: 4px; padding: 0 6px; font-family: inherit; }
