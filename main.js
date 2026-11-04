@@ -50,24 +50,85 @@ grid.rotation.x = -Math.PI / 2;
 grid.position.y = 0.06;
 addEventListener('keydown', e => { if (e.code === 'KeyG') grid.visible = !grid.visible; });
 
-// oval road made of a ring
-const road = new THREE.Mesh(
-  new THREE.RingGeometry(40, 60, 64),
-  new THREE.MeshLambertMaterial({ color: 0x333333, side: THREE.DoubleSide })
-);
-road.rotation.x = -Math.PI / 2;
-road.position.y = 0.02;
-road.receiveShadow = true;
-scene.add(road);
+// ---------- track ----------
+// Closed spline through hand-placed control points: long straight, sweepers, an S-bend and a hairpin.
+const TRACK_W = 12;
+const trackCurve = new THREE.CatmullRomCurve3([
+  [-40, -60], [20, -60], [70, -55], [100, -20], [95, 25], [60, 50], [20, 40],
+  [-5, 70], [-45, 85], [-90, 60], [-100, 10], [-70, -15], [-60, -40]
+].map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal');
+const TRACK_N = Math.round(trackCurve.getLength()); // ~1 m between samples
+const trackPts = trackCurve.getSpacedPoints(TRACK_N).slice(0, TRACK_N);
+const trackTan = trackPts.map((_, i) => trackCurve.getTangentAt(i / TRACK_N));
 
-const line = new THREE.Mesh(
-  new THREE.RingGeometry(49.8, 50.2, 64),
-  new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
-);
-line.rotation.x = -Math.PI / 2;
-line.position.y = 0.04;
-scene.add(line);
+// ribbon between two lateral offsets of the centre line over sample indices [i0, i1] (wraps around)
+function trackRibbon(ranges, offA, offB, y, material) {
+  const pos = [], idx = [];
+  for (const [i0, i1] of ranges) {
+    const base = pos.length / 3;
+    for (let i = i0; i <= i1; i++) {
+      const p = trackPts[i % TRACK_N], t = trackTan[i % TRACK_N];
+      pos.push(p.x + t.z * offA, y, p.z - t.x * offA, p.x + t.z * offB, y, p.z - t.x * offB);
+    }
+    for (let k = 0; k < i1 - i0; k++) {
+      const a = base + k * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, material);
+  m.receiveShadow = true;
+  scene.add(m);
+  return m;
+}
+const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+trackRibbon([[0, TRACK_N]], -TRACK_W / 2, TRACK_W / 2, 0.02,
+  new THREE.MeshLambertMaterial({ color: 0x333333, side: THREE.DoubleSide }));
+trackRibbon([[0, TRACK_N]], TRACK_W / 2 - 0.55, TRACK_W / 2 - 0.25, 0.04, whiteMat);
+trackRibbon([[0, TRACK_N]], -TRACK_W / 2 + 0.25, -TRACK_W / 2 + 0.55, 0.04, whiteMat);
+const dashes = [];
+for (let i = 0; i < TRACK_N; i += 6) dashes.push([i, Math.min(i + 3, TRACK_N)]);
+trackRibbon(dashes, -0.12, 0.12, 0.04, whiteMat);
 scene.add(grid);
+
+// training lot inside the loop: parking bays along one edge and a cone slalom
+const LOT = { x: -5, z: 5, w: 50, d: 40 };
+const lot = new THREE.Mesh(new THREE.PlaneGeometry(LOT.w, LOT.d), new THREE.MeshLambertMaterial({ color: 0x3a3a3a }));
+lot.rotation.x = -Math.PI / 2;
+lot.position.set(LOT.x, 0.02, LOT.z);
+lot.receiveShadow = true;
+scene.add(lot);
+const BAY = { w: 2.6, d: 5.2, count: 12 };
+const bayX0 = LOT.x - (BAY.w * BAY.count) / 2, bayZ = LOT.z + LOT.d / 2 - BAY.d / 2 - 1;
+function lotLine(x, z, w, d) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), whiteMat);
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, 0.04, z);
+  scene.add(m);
+}
+for (let k = 0; k <= BAY.count; k++) lotLine(bayX0 + k * BAY.w, bayZ, 0.12, BAY.d);
+lotLine(LOT.x, bayZ + BAY.d / 2, BAY.w * BAY.count, 0.12);
+
+// distance from a point to the track centre line
+function distToTrack(x, z) {
+  let best = Infinity;
+  for (let i = 0; i < TRACK_N; i++) {
+    const a = trackPts[i], b = trackPts[(i + 1) % TRACK_N];
+    const abx = b.x - a.x, abz = b.z - a.z;
+    const t = THREE.MathUtils.clamp(((x - a.x) * abx + (z - a.z) * abz) / (abx * abx + abz * abz), 0, 1);
+    best = Math.min(best, Math.hypot(x - (a.x + abx * t), z - (a.z + abz * t)));
+  }
+  return best;
+}
+const inLot = (x, z, m = 0) => Math.abs(x - LOT.x) < LOT.w / 2 + m && Math.abs(z - LOT.z) < LOT.d / 2 + m;
+const onPavement = (x, z) => distToTrack(x, z) < TRACK_W / 2 || inLot(x, z);
+
+// start: on the main straight, facing along the track
+const startPt = trackPts[8], startTan = trackTan[8];
+const START = { x: startPt.x, z: startPt.z, heading: Math.atan2(startTan.x, startTan.z) };
 
 // static obstacles: axis-aligned box colliders {x, z, hw, hd} (half extents)
 const obstacles = [];
@@ -78,11 +139,27 @@ function addBox(x, z, w, h, d, color) {
   scene.add(m);
   obstacles.push({ x, z, hw: w / 2, hd: d / 2 });
 }
-for (let i = 0; i < 30; i++) {
-  const a = Math.random() * Math.PI * 2;
-  const r = Math.random() < 0.5 ? 10 + Math.random() * 20 : 75 + Math.random() * 80;
-  addBox(Math.cos(a) * r, Math.sin(a) * r, 4 + Math.random() * 6, 4 + Math.random() * 14, 4 + Math.random() * 6,
-    new THREE.Color().setHSL(Math.random(), 0.2, 0.6));
+const coneGeo = new THREE.ConeGeometry(0.25, 0.7, 12).translate(0, 0.35, 0);
+const coneMat = new THREE.MeshLambertMaterial({ color: 0xff6d00 });
+function addCone(x, z) {
+  const m = new THREE.Mesh(coneGeo, coneMat);
+  m.position.set(x, 0, z);
+  m.castShadow = true;
+  scene.add(m);
+  obstacles.push({ x, z, hw: 0.25, hd: 0.25 });
+}
+for (let k = 0; k < 6; k++) addCone(LOT.x - 20 + k * 8, LOT.z - 8 + (k % 2 ? 2 : -2));
+
+// buildings scattered around the track with a fixed seed so every session has the same arena
+let seed = 20260411;
+const rand = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+for (let placed = 0, tries = 0; placed < 40 && tries < 2000; tries++) {
+  const x = -170 + rand() * 340, z = -130 + rand() * 280;
+  const w = 4 + rand() * 6, d = 4 + rand() * 6, h = 4 + rand() * 14;
+  const clear = Math.max(w, d) * 0.71 + 6; // keep a margin from the road edge
+  if (distToTrack(x, z) < TRACK_W / 2 + clear || inLot(x, z, 8)) continue;
+  addBox(x, z, w, h, d, new THREE.Color().setHSL(rand(), 0.2, 0.6));
+  placed++;
 }
 
 // ---------- car ----------
@@ -147,11 +224,11 @@ for (const sx of [-1, 1]) {
 scene.add(car);
 
 // +Z is the car's forward in local space
-// heading 0 => facing +Z; PI/2 => +X (tangent to the ring at (0,-50)); speed in m/s
-const state = { x: 0, z: -50, heading: Math.PI / 2, speed: 0 };
+// heading 0 => facing +Z; PI/2 => +X; speed in m/s
+const state = { x: START.x, z: START.z, heading: START.heading, speed: 0 };
 
 function resetCar() {
-  state.x = 0; state.z = -50; state.speed = 0; state.heading = Math.PI / 2;
+  state.x = START.x; state.z = START.z; state.speed = 0; state.heading = START.heading;
 }
 
 // oriented car rectangle vs axis-aligned box (separating axis test).
@@ -417,7 +494,7 @@ function updateCamera(dt) {
   sun.position.set(state.x + 50, 100, state.z + 30);
   sun.target.position.set(state.x, 0, state.z);
 }
-camPos.set(0, 4, -59);
+camPos.set(START.x - Math.sin(START.heading) * 9, 4, START.z - Math.cos(START.heading) * 9);
 
 // ---------- HUD ----------
 const $ = id => document.getElementById(id);
@@ -520,10 +597,15 @@ function drawMap() {
   c.scale(MAP_SCALE, MAP_SCALE);
   c.translate(-state.x, -state.z);
   c.fillStyle = '#2e5a2e'; c.fillRect(state.x - 200, state.z - 200, 400, 400);
-  c.lineWidth = 20; c.strokeStyle = '#555';
-  c.beginPath(); c.arc(0, 0, 50, 0, Math.PI * 2); c.stroke();
-  c.lineWidth = 0.6; c.strokeStyle = '#fff';
-  c.beginPath(); c.arc(0, 0, 50, 0, Math.PI * 2); c.stroke();
+  c.fillStyle = '#555'; c.fillRect(LOT.x - LOT.w / 2, LOT.z - LOT.d / 2, LOT.w, LOT.d);
+  c.lineJoin = 'round';
+  const trackPath = () => {
+    c.beginPath();
+    trackPts.forEach((p, i) => (i ? c.lineTo(p.x, p.z) : c.moveTo(p.x, p.z)));
+    c.closePath();
+  };
+  c.lineWidth = TRACK_W; c.strokeStyle = '#555'; trackPath(); c.stroke();
+  c.lineWidth = 0.6; c.strokeStyle = '#fff'; trackPath(); c.stroke();
   c.fillStyle = '#b0b0b0';
   for (const o of obstacles) c.fillRect(o.x - o.hw, o.z - o.hd, o.hw * 2, o.hd * 2);
   c.restore();
@@ -541,8 +623,7 @@ function updateHud() {
   $('brk').firstElementChild.style.height = (down('KeyS', 'ArrowDown', 'Space') ? 100 : 0) + '%';
   $('wheel').style.transform = `rotate(${-wheelAngle}deg)`;
 
-  const r = Math.hypot(state.x, state.z);
-  const onRoad = r > 40 && r < 60;
+  const onRoad = onPavement(state.x, state.z);
   $('roadState').textContent = onRoad ? 'On road' : 'Off road';
   $('roadState').className = onRoad ? 'ok' : 'bad';
   $('hits').textContent = `Collisions: ${hits}`;
